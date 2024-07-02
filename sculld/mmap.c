@@ -15,7 +15,9 @@
  * $Id: _mmap.c.in,v 1.13 2004/10/18 18:07:36 corbet Exp $
  */
 
-#include <linux/config.h>
+//#include <linux/config.h>
+#include <linux/semaphore.h>
+#include <linux/fs.h>
 #include <linux/module.h>
 
 #include <linux/mm.h>		/* everything */
@@ -56,7 +58,7 @@ void sculld_vma_close(struct vm_area_struct *vma)
  * pages from a multipage block: when they are unmapped, their count
  * is individually decreased, and would drop to 0.
  */
-
+#if 0
 struct page *sculld_vma_nopage(struct vm_area_struct *vma,
                                 unsigned long address, int *type)
 {
@@ -90,13 +92,48 @@ struct page *sculld_vma_nopage(struct vm_area_struct *vma,
 	up(&dev->sem);
 	return page;
 }
+#else
+static int sculld_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf) {
+	unsigned long offset;
+	struct sculld_dev *ptr, *dev = vma->vm_private_data;
+	struct page *page;
+	void *pageptr = NULL;
+	pgoff_t pgoff = vmf->pgoff;
 
+	down(&dev->sem);
+	offset = (pgoff << PAGE_SHIFT) + (vma->vm_pgoff << PAGE_SHIFT);
+
+	if (offset >= dev->size)
+		goto out; /* out of range */
+
+	offset >>= PAGE_SHIFT;
+
+	for (ptr = dev; ptr && offset >= dev->qset;) {
+		ptr = ptr->next;
+		offset -= dev->qset;
+	}
+
+	if (ptr && ptr->data) pageptr = ptr->data[offset];
+	if (!pageptr) goto out;
+
+	page = vmalloc_to_page(pageptr);
+	if (!page)
+		return VM_FAULT_SIGBUS;
+
+	vmf->page = page;
+
+out:
+	up(&dev->sem);
+	return 0;
+}
+#endif
 
 
 struct vm_operations_struct sculld_vm_ops = {
 	.open =     sculld_vma_open,
 	.close =    sculld_vma_close,
-	.nopage =   sculld_vma_nopage,
+	//.nopage =   sculld_vma_nopage,
+	.fault = sculld_vma_fault,
 };
 
 

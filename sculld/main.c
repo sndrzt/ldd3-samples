@@ -15,7 +15,7 @@
  * $Id: _main.c.in,v 1.21 2004/10/14 20:11:39 corbet Exp $
  */
 
-#include <linux/config.h>
+//#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/init.h>
@@ -48,10 +48,7 @@ struct sculld_dev *sculld_devices; /* allocated in sculld_init */
 int sculld_trim(struct sculld_dev *dev);
 void sculld_cleanup(void);
 
-
-
 /* Device model stuff */
-
 static struct ldd_driver sculld_driver = {
 	.version = "$Revision: 1.21 $",
 	.module = THIS_MODULE,
@@ -59,8 +56,6 @@ static struct ldd_driver sculld_driver = {
 		.name = "sculld",
 	},
 };
-
-
 
 #ifdef SCULLD_USE_PROC /* don't waste space if unused */
 /*
@@ -220,10 +215,7 @@ ssize_t sculld_read (struct file *filp, char __user *buf, size_t count,
 	return retval;
 }
 
-
-
-ssize_t sculld_write (struct file *filp, const char __user *buf, size_t count,
-                loff_t *f_pos)
+ssize_t sculld_write (struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	struct sculld_dev *dev = filp->private_data;
 	struct sculld_dev *dptr;
@@ -280,10 +272,8 @@ ssize_t sculld_write (struct file *filp, const char __user *buf, size_t count,
  * The ioctl() implementation
  */
 
-int sculld_ioctl (struct inode *inode, struct file *filp,
-                 unsigned int cmd, unsigned long arg)
+int sculld_ioctl (struct inode *inode, struct file *filp, unsigned int cmd, unsigned long arg)
 {
-
 	int err = 0, ret = 0, tmp;
 
 	/* don't even decode wrong cmds: better returning  ENOTTY than EFAULT */
@@ -409,7 +399,7 @@ loff_t sculld_llseek (struct file *filp, loff_t off, int whence)
 struct async_work {
 	struct kiocb *iocb;
 	int result;
-	struct work_struct work;
+	struct delayed_work work;
 };
 
 /*
@@ -417,14 +407,12 @@ struct async_work {
  */
 static void sculld_do_deferred_op(void *p)
 {
-	struct async_work *stuff = (struct async_work *) p;
+	struct async_work *stuff = container_of(p, struct async_work, work.work);
 	aio_complete(stuff->iocb, stuff->result, 0);
 	kfree(stuff);
 }
 
-
-static int sculld_defer_op(int write, struct kiocb *iocb, char __user *buf,
-		size_t count, loff_t pos)
+static int sculld_defer_op(int write, struct kiocb *iocb, char __user *buf, size_t count, loff_t pos)
 {
 	struct async_work *stuff;
 	int result;
@@ -445,36 +433,29 @@ static int sculld_defer_op(int write, struct kiocb *iocb, char __user *buf,
 		return result; /* No memory, just complete now */
 	stuff->iocb = iocb;
 	stuff->result = result;
-	INIT_WORK(&stuff->work, sculld_do_deferred_op, stuff);
+	INIT_DELAYED_WORK(&stuff->work, sculld_do_deferred_op);
 	schedule_delayed_work(&stuff->work, HZ/100);
 	return -EIOCBQUEUED;
 }
 
-
-static ssize_t sculld_aio_read(struct kiocb *iocb, char __user *buf, size_t count,
-		loff_t pos)
+static ssize_t sculld_aio_read(struct kiocb *iocb, const struct iovec *buf, unsigned long count, loff_t pos)
 {
-	return sculld_defer_op(0, iocb, buf, count, pos);
+	return sculld_defer_op(0, iocb, (char __user*)buf, count, pos);
 }
 
-static ssize_t sculld_aio_write(struct kiocb *iocb, const char __user *buf,
-		size_t count, loff_t pos)
+static ssize_t sculld_aio_write(struct kiocb *iocb, const struct iovec *buf, unsigned long count, loff_t pos)
 {
 	return sculld_defer_op(1, iocb, (char __user *) buf, count, pos);
 }
 
-
- 
 /*
  * Mmap *is* available, but confined in a different file
  */
 extern int sculld_mmap(struct file *filp, struct vm_area_struct *vma);
 
-
 /*
  * The fops
  */
-
 struct file_operations sculld_fops = {
 	.owner =     THIS_MODULE,
 	.llseek =    sculld_llseek,
@@ -502,8 +483,7 @@ int sculld_trim(struct sculld_dev *dev)
 			/* This code frees a whole quantum-set */
 			for (i = 0; i < qset; i++)
 				if (dptr->data[i])
-					free_pages((unsigned long)(dptr->data[i]),
-							dptr->order);
+					free_pages((unsigned long)(dptr->data[i]), dptr->order);
 
 			kfree(dptr->data);
 			dptr->data=NULL;
@@ -534,7 +514,8 @@ static void sculld_setup_cdev(struct sculld_dev *dev, int index)
 
 static ssize_t sculld_show_dev(struct device *ddev, char *buf)
 {
-	struct sculld_dev *dev = ddev->driver_data;
+	//struct sculld_dev *dev = ddev->driver_data;
+	struct sculld_dev *dev = dev_get_drvdata(ddev);
 
 	return print_dev_t(buf, dev->cdev.dev);
 }
@@ -546,11 +527,11 @@ static void sculld_register_dev(struct sculld_dev *dev, int index)
 	sprintf(dev->devname, "sculld%d", index);
 	dev->ldev.name = dev->devname;
 	dev->ldev.driver = &sculld_driver;
-	dev->ldev.dev.driver_data = dev;
+	//dev->ldev.dev.driver_data = dev;
+	dev_set_drvdata(&dev->ldev.dev, dev);
 	register_ldd_device(&dev->ldev);
 	device_create_file(&dev->ldev.dev, &dev_attr_dev);
 }
-
 
 /*
  * Finally, the module stuff
@@ -596,7 +577,6 @@ int sculld_init(void)
 		sculld_register_dev(sculld_devices + i, i);
 	}
 
-
 #ifdef SCULLD_USE_PROC /* only when available */
 	create_proc_read_entry("sculldmem", 0, NULL, sculld_read_procmem, NULL);
 #endif
@@ -606,8 +586,6 @@ int sculld_init(void)
 	unregister_chrdev_region(dev, sculld_devs);
 	return result;
 }
-
-
 
 void sculld_cleanup(void)
 {
@@ -627,6 +605,6 @@ void sculld_cleanup(void)
 	unregister_chrdev_region(MKDEV (sculld_major, 0), sculld_devs);
 }
 
-
 module_init(sculld_init);
 module_exit(sculld_cleanup);
+
